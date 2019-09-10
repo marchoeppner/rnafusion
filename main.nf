@@ -334,7 +334,7 @@ process star_fusion {
     input:
     set val(name), file(reads) from read_files_star_fusion
     file star_index_star_fusion
-    file reference from star_fusion_ref
+    file reference from star_fusion_ref.collect()
 
     output:
     file '*fusion_predictions.tsv' optional true into star_fusion_fusions
@@ -384,7 +384,7 @@ process fusioncatcher {
 
     input:
     set val(name), file(reads) from read_files_fusioncatcher
-    file data_dir from fusioncatcher_ref
+    file data_dir from fusioncatcher_ref.collect()
 
     output:
     file 'final-list_candidate-fusion-genes.txt' optional true into fusioncatcher_fusions
@@ -415,7 +415,7 @@ process ericscript {
 
     input:
     set val(name), file(reads) from read_files_ericscript
-    file reference from ericscript_ref
+    file reference from ericscript_ref.collect()
 
     output:
     file './tmp/fusions.results.filtered.tsv' optional true into ericscript_fusions
@@ -445,8 +445,8 @@ process pizzly {
 
     input:
     set val(name), file(reads) from read_files_pizzly
-    file fasta from pizzly_fasta
-    file gtf from pizzly_gtf
+    file fasta from pizzly_fasta.collect()
+    file gtf from pizzly_gtf.collect()
     
     output:
     file 'pizzly_fusions.txt' optional true into pizzly_fusions
@@ -480,7 +480,7 @@ process squid {
     input:
     set val(name), file(reads) from read_files_squid
     file star_index_squid
-    file gtf from gtf_squid
+    file gtf from gtf_squid.collect()
     
     output:
     file '*_annotated.txt' optional true into squid_fusions
@@ -557,7 +557,7 @@ process fusion_inspector {
 
     input:
     set val(name), file(reads) from read_files_fusion_inspector
-    file reference from fusion_inspector_ref
+    file reference from fusion_inspector_ref.collect()
     file fusion_inspector_input_list
 
     output:
