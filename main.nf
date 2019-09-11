@@ -333,7 +333,7 @@ process star_fusion {
 
     input:
     set val(name), file(reads) from read_files_star_fusion
-    file star_index_star_fusion
+    file star_index from star_index_star_fusion.collect()
     file reference from star_fusion_ref.collect()
 
     output:
@@ -346,7 +346,7 @@ process star_fusion {
     def extra_params = params.star_fusion_opt ? "${params.star_fusion_opt}" : ''
     """
     STAR \\
-        --genomeDir ${star_index_star_fusion} \\
+        --genomeDir ${star_index} \\
         --readFilesIn ${reads} \\
         --twopassMode Basic \\
         --outReadsUnmapped None \\
@@ -387,12 +387,13 @@ process fusioncatcher {
     file data_dir from fusioncatcher_ref.collect()
 
     output:
-    file 'final-list_candidate-fusion-genes.txt' optional true into fusioncatcher_fusions
+    file $fusion_gene_list optional true into fusioncatcher_fusions
     file '*.{txt,zip,log}' into fusioncatcher_output
 
     script:
     option = params.singleEnd ? reads[0] : "${reads[0]},${reads[1]}"
     def extra_params = params.fusioncatcher_opt ? "${params.fusioncatcher_opt}" : ''
+    fusion_gene_list = name + ".final-list_candidate-fusion-genes.txt"
     """
     fusioncatcher \\
         -d ${data_dir} \\
@@ -400,6 +401,8 @@ process fusioncatcher {
         --threads ${task.cpus} \\
         -o . \\
         --skip-blat ${extra_params}
+
+	mv final-list_candidate-fusion-genes.txt $fusion_gene_list
     """
 }
 
@@ -418,14 +421,15 @@ process ericscript {
     file reference from ericscript_ref.collect()
 
     output:
-    file './tmp/fusions.results.filtered.tsv' optional true into ericscript_fusions
-    file './tmp/fusions.results.total.tsv' optional true into ericscript_output
+    file './tmp/${name}.results.filtered.tsv' optional true into ericscript_fusions
+    file './tmp/${name}.results.total.tsv' optional true into ericscript_output
 
     script:
+    
     """
     ericscript.pl \\
         -db ${reference} \\
-        -name fusions \\
+        -name $name \\
         -p ${task.cpus} \\
         -o ./tmp \\
         ${reads[0]} \\
@@ -449,10 +453,11 @@ process pizzly {
     file gtf from pizzly_gtf.collect()
     
     output:
-    file 'pizzly_fusions.txt' optional true into pizzly_fusions
+    file pizzly_fusions optional true into pizzly_fusions
     file '*.{json,txt}' into pizzly_output
 
     script:
+    pizzly_fusions = name + ".pizzly_fusions.txt"
     """
     kallisto index -i index.idx -k ${params.pizzly_k} ${fasta}
     kallisto quant -t ${task.cpus} -i index.idx --fusion -o output ${reads[0]} ${reads[1]}
@@ -463,7 +468,7 @@ process pizzly {
         --insert-size 400 \\
         --fasta ${fasta} \\
         --output pizzly_fusions output/fusion.txt
-    pizzly_flatten_json.py pizzly_fusions.json pizzly_fusions.txt
+    pizzly_flatten_json.py pizzly_fusions.json $pizzly_fusions
     """
 }
 
@@ -524,8 +529,8 @@ process summary {
     file squid from squid_fusions.ifEmpty('')
 
     output:
-    file 'fusions_list.txt' into fusion_inspector_input_list
-    file 'fusion_genes_mqc.json' into summary_fusions_mq
+    file '${name}.fusions_list.txt' into fusion_inspector_input_list
+    file '${name}.fusion_genes_mqc.json' into summary_fusions_mq
     file '*' into report
     
     script:
@@ -538,6 +543,9 @@ process summary {
     """
     fusion_report run ${name} . ${params.databases} \\
         ${tools} ${extra_params}
+
+    mv fusion_lists.txt ${name}.fusion_lists.txt
+    mv fusion_genes_mqc.json ${name}.fusion_genes_mqc.json
     """
 }
 
@@ -572,7 +580,7 @@ process fusion_inspector {
         --right_fq ${reads[1]} \\
         --CPU ${task.cpus} \\
         --out_dir . \\
-        --out_prefix finspector \\
+        --out_prefix ${name}.finspector \\
         --prep_for_IGV
     """
 }
@@ -653,7 +661,7 @@ process multiqc {
     file ('fastqc/*') from fastqc_results.collect().ifEmpty([])
     file ('software_versions/*') from software_versions_yaml.collect()
     file workflow_summary from create_workflow_summary(summary)
-    file fusions_mq from summary_fusions_mq.ifEmpty('')
+    file fusions_mq from summary_fusions_mq.collect().ifEmpty('')
 
     output:
     file "*multiqc_report.html" into multiqc_report
