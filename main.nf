@@ -206,21 +206,21 @@ if(params.readPaths){
             .from(params.readPaths)
             .map { row -> [ row[0], [file(row[1][0])]] }
             .ifEmpty { exit 1, "params.readPaths was empty - no input files supplied" }
-            .into { read_files_fastqc; read_files_summary; read_files_multiqc; read_files_star_fusion; read_files_fusioncatcher; 
+            .into { read_files_fastqc; read_files_debug; read_files_summary; read_files_multiqc; read_files_star_fusion; read_files_fusioncatcher; 
                 read_files_gfusion; read_files_fusion_inspector; read_files_ericscript; read_files_pizzly; read_files_squid }
     } else {
         Channel
             .from(params.readPaths)
             .map { row -> [ row[0], [file(row[1][0]), file(row[1][1])]] }
             .ifEmpty { exit 1, "params.readPaths was empty - no input files supplied" }
-            .into { read_files_fastqc; read_files_summary; read_files_multiqc; read_files_star_fusion; read_files_fusioncatcher; 
+            .into { read_files_fastqc; read_files_debug; read_files_summary; read_files_multiqc; read_files_star_fusion; read_files_fusioncatcher; 
                 read_files_gfusion; read_files_fusion_inspector; read_files_ericscript; read_files_pizzly; read_files_squid }
     }
 } else {
     Channel
         .fromFilePairs( params.reads, size: params.singleEnd ? 1 : 2 )
         .ifEmpty { exit 1, "Cannot find any reads matching: ${params.reads}\nNB: Path needs to be enclosed in quotes!\nIf this is single-end data, please specify --singleEnd on the command line." }
-        .into { read_files_fastqc; read_files_summary; read_files_multiqc; read_files_star_fusion; read_files_fusioncatcher; 
+        .into { read_files_fastqc; read_files_debug; read_files_summary; read_files_multiqc; read_files_star_fusion; read_files_fusioncatcher; 
             read_files_gfusion; read_files_fusion_inspector; read_files_ericscript; read_files_pizzly; read_files_squid }
 }
 
@@ -337,13 +337,14 @@ process star_fusion {
     file reference from star_fusion_ref.collect()
 
     output:
-    file '*fusion_predictions.tsv' optional true into star_fusion_fusions
+    set val(name),file('*fusion_predictions.tsv') optional true into star_fusion_fusions
     file '*.{tsv,txt}' into star_fusion_output
 
     script:
     def avail_mem = task.memory ? "--limitBAMsortRAM ${task.memory.toBytes() - 100000000}" : ''
     option = params.singleEnd ? "--left_fq ${reads[0]}" : "--left_fq ${reads[0]} --right_fq ${reads[1]}"
     def extra_params = params.star_fusion_opt ? "${params.star_fusion_opt}" : ''
+    star_fusion_result = name + ".star-fusion.fusion_predictions.tsv"
     """
     STAR \\
         --genomeDir ${star_index} \\
@@ -369,6 +370,7 @@ process star_fusion {
         --CPU ${task.cpus} \\
         --examine_coding_effect \\
         --output_dir . ${extra_params}
+	mv star-fusion.fusion_predictions.tsv $star_fusion_result
     """
 }
 
@@ -387,7 +389,7 @@ process fusioncatcher {
     file data_dir from fusioncatcher_ref.collect()
 
     output:
-    file $fusion_gene_list optional true into fusioncatcher_fusions
+    set val(name),file($fusion_gene_list) optional true into fusioncatcher_fusions
     file '*.{txt,zip,log}' into fusioncatcher_output
 
     script:
@@ -421,7 +423,7 @@ process ericscript {
     file reference from ericscript_ref.collect()
 
     output:
-    file './tmp/${name}.results.filtered.tsv' optional true into ericscript_fusions
+    set val(name),file('./tmp/${name}.results.filtered.tsv') optional true into ericscript_fusions
     file './tmp/${name}.results.total.tsv' optional true into ericscript_output
 
     script:
@@ -453,7 +455,7 @@ process pizzly {
     file gtf from pizzly_gtf.collect()
     
     output:
-    file pizzly_fusions optional true into pizzly_fusions
+    set val(name),file(pizzly_fusions) optional true into pizzly_fusions
     file '*.{json,txt}' into pizzly_output
 
     script:
@@ -484,18 +486,18 @@ process squid {
 
     input:
     set val(name), file(reads) from read_files_squid
-    file star_index_squid
+    file star_index from star_index_squid.collect()
     file gtf from gtf_squid.collect()
     
     output:
-    file '*_annotated.txt' optional true into squid_fusions
+    set val(name),file('*_annotated.txt') optional true into squid_fusions
     file '*.txt' into squid_output
 
     script:
     def avail_mem = task.memory ? "--limitBAMsortRAM ${task.memory.toBytes() - 100000000}" : ''
     """
     STAR \\
-        --genomeDir ${star_index_squid} \\
+        --genomeDir ${star_index} \\
         --sjdbGTFfile ${gtf} \\
         --runThreadN ${task.cpus} \\
         --readFilesIn ${reads[0]} ${reads[1]} \\
@@ -505,49 +507,17 @@ process squid {
         --readFilesCommand zcat
     mv Aligned.sortedByCoord.out.bam ${name}Aligned.sortedByCoord.out.bam
     samtools view -bS Chimeric.out.sam > ${name}Chimeric.out.bam
-    squid -b ${name}Aligned.sortedByCoord.out.bam -c ${name}Chimeric.out.bam -o fusions
-    AnnotateSQUIDOutput.py ${gtf} fusions_sv.txt fusions_annotated.txt
+    squid -b ${name}Aligned.sortedByCoord.out.bam -c ${name}Chimeric.out.bam -o ${name}.fusions
+    AnnotateSQUIDOutput.py ${gtf} ${name}.fusions_sv.txt ${name}.fusions_annotated.txt
     """
 }
 
 /*************************************************************
  * Summarizing results from tools
  ************************************************************/
-process summary {
-    tag "$name"
-    publishDir "${params.outdir}/Report-${name}", mode: 'copy'
- 
-    when:
-    !params.debug && (params.fusioncatcher || params.star_fusion || params.ericscript || params.pizzly || params.squid)
-    
-    input:
-    set val(name), file(reads) from read_files_summary
-    file fusioncatcher from fusioncatcher_fusions.ifEmpty('')
-    file starfusion from star_fusion_fusions.ifEmpty('')
-    file ericscript from ericscript_fusions.ifEmpty('')
-    file pizzly from pizzly_fusions.ifEmpty('')
-    file squid from squid_fusions.ifEmpty('')
-
-    output:
-    file '${name}.fusions_list.txt' into fusion_inspector_input_list
-    file '${name}.fusion_genes_mqc.json' into summary_fusions_mq
-    file '*' into report
-    
-    script:
-    def extra_params = params.fusion_report_opt ? "${params.fusion_report_opt}" : ''
-    def tools = !fusioncatcher.empty() ? "--fusioncatcher ${fusioncatcher} " : ''
-    tools += !starfusion.empty() ? "--starfusion ${starfusion} " : ''
-    tools += !ericscript.empty() ? "--ericscript ${ericscript} " : ''
-    tools += !pizzly.empty() ? "--pizzly ${pizzly} " : ''
-    tools += !squid.empty() ? "--squid ${squid} " : ''
-    """
-    fusion_report run ${name} . ${params.databases} \\
-        ${tools} ${extra_params}
-
-    mv fusion_lists.txt ${name}.fusion_lists.txt
-    mv fusion_genes_mqc.json ${name}.fusion_genes_mqc.json
-    """
-}
+read_files_debug
+	.join(squid_fusions)
+	.println()
 
 /*************************************************************
  * Visualization
@@ -556,34 +526,7 @@ process summary {
 /*
  * Fusion Inspector
  */
-process fusion_inspector {
-    tag "$name"
-    publishDir "${params.outdir}/tools/FusionInspector", mode: 'copy'
 
-    when:
-    params.fusion_inspector && (!params.singleEnd || params.debug)
-
-    input:
-    set val(name), file(reads) from read_files_fusion_inspector
-    file reference from fusion_inspector_ref.collect()
-    file fusion_inspector_input_list
-
-    output:
-    file '*.{fa,gtf,bed,bam,bai,txt}' into fusion_inspector_output
-
-    script:
-    """
-    FusionInspector \\
-        --fusions ${fusion_inspector_input_list} \\
-        --genome_lib ${reference} \\
-        --left_fq ${reads[0]} \\
-        --right_fq ${reads[1]} \\
-        --CPU ${task.cpus} \\
-        --out_dir . \\
-        --out_prefix ${name}.finspector \\
-        --prep_for_IGV
-    """
-}
 
 /*************************************************************
  * Quality check & software verions
@@ -646,35 +589,6 @@ process fastqc {
     """
 }
 
-/*
- * MultiQC
- */
-process multiqc {
-    tag "$name"
-    publishDir "${params.outdir}/MultiQC", mode: 'copy'
-
-    when:
-    !params.debug
-
-    input:
-    file multiqc_config from ch_multiqc_config
-    file ('fastqc/*') from fastqc_results.collect().ifEmpty([])
-    file ('software_versions/*') from software_versions_yaml.collect()
-    file workflow_summary from create_workflow_summary(summary)
-    file fusions_mq from summary_fusions_mq.collect().ifEmpty('')
-
-    output:
-    file "*multiqc_report.html" into multiqc_report
-    file "*_data"
-    file "multiqc_plots"
-
-    script:
-    rtitle = custom_runName ? "--title \"$custom_runName\"" : ''
-    rfilename = custom_runName ? "--filename " + custom_runName.replaceAll('\\W','_').replaceAll('_+','_') + "_multiqc_report" : ''
-    """
-    multiqc -f $rtitle $rfilename --config $multiqc_config .
-    """
-}
 
 /*
  * Output Description HTML
